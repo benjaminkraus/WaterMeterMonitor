@@ -91,7 +91,7 @@ void updateIntervalCounts(time_t now) {
 int16_t lastReading[] = {0, 0, 0};
 int16_t minReading[] = { 32767,  32767,  32767};
 int16_t maxReading[] = {-32768, -32768, -32768};
-uint64_t samplingDelay = 7;
+uint64_t samplingDelay = 8; // 8 milliseconds = 125 Hz
 uint64_t lastReadingTimestamp = 0;
 bool lastReadingHigh[] = {false, false, false};
 
@@ -228,7 +228,7 @@ void loop() {
   // Read new values.
   if (foundLIS3MDL) {
     uint64_t now = System.millis();
-    if (foundLIS3MDL && now - lastReadingTimestamp > samplingDelay) {
+    if (foundLIS3MDL && now - lastReadingTimestamp >= samplingDelay) {
       updateReadings();
     }
   }
