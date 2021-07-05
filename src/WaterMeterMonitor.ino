@@ -13,27 +13,40 @@ Adafruit_LIS3MDL lis3mdl;
 
 bool foundLIS3MDL = false;
 int16_t lastReading[] = {0, 0, 0};
+int16_t minReading[] = { 32767,  32767,  32767};
+int16_t maxReading[] = {-32768, -32768, -32768};
 
-
-String getStatusJSON(bool foundLIS3MDL, int16_t* reading) {
-  char buf[256];
-  JSONBufferWriter writer(buf, sizeof(buf)-1);
-  writer.beginObject();
-    writer.name("LIS3MDL").value(foundLIS3MDL);
-    writer.name("x").value(reading[0]);
-    writer.name("y").value(reading[1]);
-    writer.name("z").value(reading[2]);
-  writer.endObject();
-  writer.buffer()[std::min(writer.bufferSize(), writer.dataSize())] = 0;
-  return buf;
+void updateReadings(int channel, int16_t reading) {
+  lastReading[channel] = reading;
+  minReading[channel] = min(minReading[channel], reading);
+  maxReading[channel] = max(maxReading[channel], reading);
 }
 
-String getCurrentStatusJSON() {
-  return getStatusJSON(foundLIS3MDL, lastReading);
+int resetReadings(String) {
+  for (int c = 0; c < 3; ++c) {
+    lastReading[c] = 0;
+    minReading[c] = 32767;
+    maxReading[c] = -32768;
+  }
+  return 0;
+}
+
+String getStatusOneChannel(int channel) {
+  return String::format("{ \"last\": \"%i\", \"min\": %i, \"max\": %i }",
+    lastReading[channel], minReading[channel], maxReading[channel]);
+}
+
+String getStatusJSON() {
+  String x = getStatusOneChannel(0);
+  String y = getStatusOneChannel(1);
+  String z = getStatusOneChannel(2);
+  return String::format("{ \"x\": \"%s\", \"y\": %s, \"z\": %s }",
+    x.c_str(), y.c_str(), z.c_str());
 }
 
 void setup() {
-  Particle.variable("status", getCurrentStatusJSON);
+  Particle.variable("status", getStatusJSON);
+  Particle.function("resetReadings", resetReadings);
 
   // Attempt to connect to the LIS3MDL board.
   foundLIS3MDL = lis3mdl.begin_SPI(LIS3MDL_CS);
@@ -55,9 +68,9 @@ void loop() {
   // Read new values
   if (foundLIS3MDL) {
     lis3mdl.read();
-    lastReading[0] = lis3mdl.x;
-    lastReading[1] = lis3mdl.y;
-    lastReading[2] = lis3mdl.z;
-    delay(500);
+    updateReadings(0, lis3mdl.x);
+    updateReadings(1, lis3mdl.y);
+    updateReadings(2, lis3mdl.z);
+    delay(8); // 125 Hz
   }
 }
