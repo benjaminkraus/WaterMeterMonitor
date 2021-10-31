@@ -20,105 +20,73 @@ bool foundLIS3MDL = false;
 // Pulse counters
 String channels[] = {"x", "y", "z"};
 time_t intervalLength = 5; // 5 second intervals
-time_t intervalStart = 0;
-time_t lastIntervalStart = 0;
-unsigned short sampleCount = 0;
-float sampleRate = 0;
+time_t lastInterval = 0;
 unsigned short intervalCount[] = {0, 0, 0};
 unsigned long dailyCount[] = {0, 0, 0};
+time_t firstPulseTimestamp = 0;
+time_t lastPulseTimestamp = 0;
+bool waterRunning = false;
 
-unsigned short lastIntervalCount[] = {0, 0, 0};
-unsigned long lastDailyCount[] = {0, 0, 0};
+String getPulseCountsJSON() {
+  return String::format("{ \"x\": \"%u\", \"y\": \"%u\", \"z\": \"%u\" }",
+    dailyCount[0], dailyCount[1], dailyCount[2]);
+}
 
-unsigned short minIntervalCount[] = {0, 0, 0};
-unsigned short maxIntervalCount[] = {0, 0, 0};
+void publishUpdate(time_t timestamp, String statusMsg) {
+  String timestr = Time.format(timestamp, TIME_FORMAT_ISO8601_FULL);
+  String status = String::format(
+    "{ \"waterRunning\": \"%d\", \"time\": \"%s\", \"pulseCount\": %s, \"statusMessage\": \"%s\" }",
+        waterRunning, timestr.c_str(), getPulseCountsJSON().c_str(), statusMsg.c_str());
+  Particle.publish("watermeter", status);
+}
 
-unsigned short lastMinIntervalCount[] = {0, 0, 0};
-unsigned short lastMaxIntervalCount[] = {0, 0, 0};
-
-bool waterRunning[] = {false, false, false};
-time_t lastStateChange[] = {0, 0, 0};
-
-// Functions to handle counters.
-void resetCounter(unsigned short* counter, unsigned short* last) {
-  last[0] = counter[0];
-  last[1] = counter[1];
-  last[2] = counter[2];
+void resetCounter(unsigned short* counter) {
   counter[0] = 0;
   counter[1] = 0;
   counter[2] = 0;
 }
 
-void resetCounter(unsigned long* counter, unsigned long* last) {
-  last[0] = counter[0];
-  last[1] = counter[1];
-  last[2] = counter[2];
+void resetCounter(unsigned long* counter) {
   counter[0] = 0;
   counter[1] = 0;
   counter[2] = 0;
 }
 
-void updateMinMaxCounts() {
-  for (int c = 0; c < 3; ++c) {
-    minIntervalCount[c] = min(minIntervalCount[c], intervalCount[c]);
-    maxIntervalCount[c] = max(maxIntervalCount[c], intervalCount[c]);
+void updateWaterRunning() {
+  bool wasWaterRunning = waterRunning;
+  waterRunning = intervalCount[0] != 0 || 
+    intervalCount[1] != 0 || intervalCount[2] != 0;
+  if (wasWaterRunning != waterRunning) {
+    // If the water just started running, report the first pulse timestamp.
+    // If the water just stopped running, report the last pulse timestamp.
+    time_t stateChangeTime = waterRunning ? 
+      firstPulseTimestamp : (lastPulseTimestamp + 1);
+
+    // Either way, reset the firstPulseTimestamp.
+    firstPulseTimestamp = 0;
+
+    // Publish an event indicating the water turned on or off.
+    publishUpdate(stateChangeTime, "state change");
   }
 }
 
-void updateWaterRunning(time_t now) {
-  bool stateChange = false;
-  for (int c = 0; c < 3; ++c) {
-    bool wasWaterRunning = waterRunning[c];
-    waterRunning[c] = intervalCount[c] != 0;
+void intervalUpdates(time_t currentInterval) {
+  // Determine whether the water is running or not.
+  updateWaterRunning();
 
-    if (waterRunning[c] != wasWaterRunning) {
-      stateChange = true;
-      lastStateChange[c] = intervalStart;
-    }
-  }
-  if (stateChange) {
-    Particle.publish("watermeter/waterStateChange", 
-      String::format("{ \"x\": \"%s\", \"y\": \"%s\", \"z\": \"%s\" }",
-      waterRunning[0] ? "true" : "false", 
-      waterRunning[1] ? "true" : "false", 
-      waterRunning[2] ? "true" : "false"));
-  }
-}
-
-void sendHourlyUpdate() {
-  Particle.publish("watermeter/pulseCount",
-      String::format("{ \"x\": %i, \"y\": %i, \"z\": %i }",
-      dailyCount[0], dailyCount[1], dailyCount[2]));
-}
-
-void updateIntervalCounts(time_t now) {
-  if (Time.hour(now) != Time.hour(intervalStart)) {
-    sendHourlyUpdate();
-  }
-
-  if (Time.day(now) != Time.day(intervalStart)) {
-    resetCounter(dailyCount, lastDailyCount);
-  }
-
-  if (Time.minute(now) != Time.minute(intervalStart)) {
-    resetCounter(maxIntervalCount, lastMaxIntervalCount);
-    resetCounter(minIntervalCount, lastMinIntervalCount);
-    sampleRate = (float)sampleCount / 60;
-    sampleCount = 0;
-  }
-
-  if ((now / intervalLength) != (intervalStart / intervalLength)) {
-    updateMinMaxCounts();
-    updateWaterRunning(now);
-    resetCounter(intervalCount, lastIntervalCount);
-    lastIntervalStart = intervalStart;
-    intervalStart = (now / intervalLength) * intervalLength;
-  }
+  // Reset the interval counters.
+  resetCounter(intervalCount);
+  lastInterval = currentInterval;
 }
 
 /**********************
  * Magnetometer Readings
  **********************/
+
+// Variables to calculate sampling rate.
+unsigned short sampleCount = 0;
+unsigned short minSampleCount = USHRT_MAX;
+unsigned short maxSampleCount = 0;
 
 // Variables to store readings.
 int16_t lastReading[] = {0, 0, 0};
@@ -136,6 +104,10 @@ int16_t highThreshold[] = {-369, -1816, -20953};
 void incrementCounts(int c) {
   ++intervalCount[c];
   ++dailyCount[c];
+  lastPulseTimestamp = Time.now();
+  if (firstPulseTimestamp == 0) {
+    firstPulseTimestamp = lastPulseTimestamp;
+  }
 }
 
 void updateChannelReadings(int c, int16_t reading) {
@@ -165,65 +137,7 @@ void updateReadings() {
   updateChannelReadings(2, lis3mdl.z);
 }
 
-int resetReadings(String) {
-  for (int c = 0; c < 3; ++c) {
-    lastReading[c] = 0;
-    minReading[c] = 32767;
-    maxReading[c] = -32768;
-  }
-  return 0;
-}
-
-String getReadingStatusOneChannel(int c) {
-  return String::format("{ \"last\": %i, \"min\": %i, \"max\": %i }",
-    lastReading[c], minReading[c], maxReading[c]);
-}
-
-String getReadingStatusJSON() {
-  String x = getReadingStatusOneChannel(0);
-  String y = getReadingStatusOneChannel(1);
-  String z = getReadingStatusOneChannel(2);
-  return String::format("{ \"x\": %s, \"y\": %s, \"z\": %s }",
-    x.c_str(), y.c_str(), z.c_str());
-}
-
-String getCounterStatusOneChannel(int c,
-  unsigned short* interval, unsigned long* daily) {
-  return String::format("{ \"interval\": %i, \"day\": %i }",
-    interval[c], daily[c]);
-}
-
-String getMinMaxCountChannel(int c) {
-  return String::format("{ \"min\": %i, \"max\": %i }",
-    minIntervalCount[c], maxIntervalCount[c]);
-}
-
-String getCounterStatusOneChannel(int c) {
-  return String::format("{ \"current\": %s, \"last\": %s, \"minmax\": %s }",
-    getCounterStatusOneChannel(c, intervalCount, dailyCount).c_str(),
-    getCounterStatusOneChannel(c, lastIntervalCount, lastDailyCount).c_str(),
-    getMinMaxCountChannel(c).c_str());
-}
-
-String getCounterStatusJSON() {
-  String x = getCounterStatusOneChannel(0);
-  String y = getCounterStatusOneChannel(1);
-  String z = getCounterStatusOneChannel(2);
-  return String::format("{ \"x\": %s, \"y\": %s, \"z\": %s, \"sample_rate\": %f }",
-    x.c_str(), y.c_str(), z.c_str(), sampleRate);
-}
-
-String getStatusJSON() {
-  String counterStatus = getCounterStatusJSON();
-  String readingsStatus = getReadingStatusJSON();
-  return String::format("{ \"counters\": %s, \"readings\": %s }",
-    counterStatus.c_str(), readingsStatus.c_str());
-}
-
 void setup() {
-  Particle.variable("status", getStatusJSON);
-  Particle.function("resetReadings", resetReadings);
-
   // Hard-coded Eastern Standard Time
   Time.zone(-5);
 
@@ -243,16 +157,29 @@ void setup() {
   }
 
   if (foundLIS3MDL) {
+    // Get initial readings from the magnetometer.
     updateReadings();
-    updateIntervalCounts(Time.now());
+
+    // Getting the initial readings could have triggered erroneous pulse counts.
+    // Reset the pulse counts back to zero.
+    resetCounter(intervalCount);
+    resetCounter(dailyCount);
+    firstPulseTimestamp = 0;
   }
+  
+  // Set the last interval start as one higher than the current interval, which
+  // which will delay any interval counts until a full interval has elapsed.
+  lastInterval = (Time.now() / intervalLength) + 1;
+
+  // Publish a message indicating that startup completed.
+  publishUpdate(Time.now(), "restart");
 }
 
 void loop() {
   // Update counters based on the current time.
-  time_t currentTime = Time.now();
-  if (currentTime - intervalStart > intervalLength) {
-    updateIntervalCounts(currentTime);
+  time_t currentInterval = (Time.now() / intervalLength);
+  if (currentInterval > lastInterval) {
+    intervalUpdates(currentInterval);
   }
 
   // Read new values.
