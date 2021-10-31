@@ -27,15 +27,24 @@ time_t firstPulseTimestamp = 0;
 time_t lastPulseTimestamp = 0;
 bool waterRunning = false;
 
+// Variables to calculate sampling rate.
+unsigned short sampleCount = 0;
+unsigned short lastMinuteSampleCount = 0;
+
 String getPulseCountsJSON() {
-  return String::format("{ \"x\": \"%u\", \"y\": \"%u\", \"z\": \"%u\" }",
+  return String::format("{ \"x\": %u, \"y\": %u, \"z\": %u }",
     dailyCount[0], dailyCount[1], dailyCount[2]);
+}
+
+String getDiagnosticJSON() {
+  float sampleRate = (float)lastMinuteSampleCount/60;
+  return String::format("\"{ \\\"sampleRate\\\": %f }\"", sampleRate);
 }
 
 void publishWaterOn(time_t timestamp) {
   String timestr = Time.format(timestamp, TIME_FORMAT_ISO8601_FULL);
   String status = String::format(
-    "{ \"waterRunning\": \"1\", \"time\": \"%s\", \"statusMessage\": \"water on\" }",
+    "{ \"waterRunning\": 1, \"time\": \"%s\", \"statusMessage\": \"water on\" }",
         timestr.c_str());
   Particle.publish("waterMeter/waterOn", status);
 }
@@ -43,16 +52,16 @@ void publishWaterOn(time_t timestamp) {
 void publishWaterRunning(time_t timestamp, String statusMsg) {
   String timestr = Time.format(timestamp, TIME_FORMAT_ISO8601_FULL);
   String status = String::format(
-    "{ \"waterRunning\": \"%d\", \"time\": \"%s\", \"pulseCount\": %s, \"statusMessage\": \"%s\" }",
-        waterRunning, timestr.c_str(), getPulseCountsJSON().c_str(), statusMsg.c_str());
+    "{ \"waterRunning\": %d, \"time\": \"%s\", \"pulseCount\": %s, \"statusMessage\": \"%s\", \"diagnostics\": %s }",
+        waterRunning, timestr.c_str(), getPulseCountsJSON().c_str(), statusMsg.c_str(), getDiagnosticJSON().c_str());
   Particle.publish("waterMeter/waterRunning", status);
 }
 
 void publishStatus(time_t timestamp, String statusMsg) {
   String timestr = Time.format(timestamp, TIME_FORMAT_ISO8601_FULL);
   String status = String::format(
-    "{ \"waterRunning\": \"%d\", \"time\": \"%s\", \"pulseCount\": %s, \"statusMessage\": \"%s\" }",
-        waterRunning, timestr.c_str(), getPulseCountsJSON().c_str(), statusMsg.c_str());
+    "{ \"waterRunning\": %d, \"time\": \"%s\", \"pulseCount\": %s, \"statusMessage\": \"%s\", \"diagnostics\": %s }",
+        waterRunning, timestr.c_str(), getPulseCountsJSON().c_str(), statusMsg.c_str(), getDiagnosticJSON().c_str());
   Particle.publish("waterMeter/status", status);
 }
 
@@ -93,8 +102,17 @@ bool updateWaterRunning() {
 }
 
 void intervalUpdates(time_t currentInterval) {
+  time_t now = currentInterval * intervalLength;
+  time_t intervalStartTime = lastInterval * intervalLength;
+
   // Determine whether the water is running or not.
   updateWaterRunning();
+
+  // Update minute counters.
+  if (Time.minute(now) != Time.minute(intervalStartTime)) {
+    lastMinuteSampleCount = sampleCount;
+    sampleCount = 0;
+  }
 
   // Reset the interval counters.
   resetCounter(intervalCount);
@@ -104,11 +122,6 @@ void intervalUpdates(time_t currentInterval) {
 /**********************
  * Magnetometer Readings
  **********************/
-
-// Variables to calculate sampling rate.
-unsigned short sampleCount = 0;
-unsigned short minSampleCount = USHRT_MAX;
-unsigned short maxSampleCount = 0;
 
 // Variables to store readings.
 int16_t lastReading[] = {0, 0, 0};
