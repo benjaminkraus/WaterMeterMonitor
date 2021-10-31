@@ -32,12 +32,28 @@ String getPulseCountsJSON() {
     dailyCount[0], dailyCount[1], dailyCount[2]);
 }
 
-void publishUpdate(time_t timestamp, String statusMsg) {
+void publishWaterOn(time_t timestamp) {
+  String timestr = Time.format(timestamp, TIME_FORMAT_ISO8601_FULL);
+  String status = String::format(
+    "{ \"waterRunning\": \"1\", \"time\": \"%s\", \"statusMessage\": \"water on\" }",
+        timestr.c_str());
+  Particle.publish("waterMeter/waterOn", status);
+}
+
+void publishWaterRunning(time_t timestamp, String statusMsg) {
   String timestr = Time.format(timestamp, TIME_FORMAT_ISO8601_FULL);
   String status = String::format(
     "{ \"waterRunning\": \"%d\", \"time\": \"%s\", \"pulseCount\": %s, \"statusMessage\": \"%s\" }",
         waterRunning, timestr.c_str(), getPulseCountsJSON().c_str(), statusMsg.c_str());
-  Particle.publish("watermeter", status);
+  Particle.publish("waterMeter/waterRunning", status);
+}
+
+void publishStatus(time_t timestamp, String statusMsg) {
+  String timestr = Time.format(timestamp, TIME_FORMAT_ISO8601_FULL);
+  String status = String::format(
+    "{ \"waterRunning\": \"%d\", \"time\": \"%s\", \"pulseCount\": %s, \"statusMessage\": \"%s\" }",
+        waterRunning, timestr.c_str(), getPulseCountsJSON().c_str(), statusMsg.c_str());
+  Particle.publish("waterMeter/status", status);
 }
 
 void resetCounter(unsigned short* counter) {
@@ -52,22 +68,28 @@ void resetCounter(unsigned long* counter) {
   counter[2] = 0;
 }
 
-void updateWaterRunning() {
+bool updateWaterRunning() {
+  bool messageSent = false;
   bool wasWaterRunning = waterRunning;
   waterRunning = intervalCount[0] != 0 || 
     intervalCount[1] != 0 || intervalCount[2] != 0;
   if (wasWaterRunning != waterRunning) {
-    // If the water just started running, report the first pulse timestamp.
-    // If the water just stopped running, report the last pulse timestamp.
-    time_t stateChangeTime = waterRunning ? 
-      firstPulseTimestamp : (lastPulseTimestamp + 1);
+    if (waterRunning) {
+      // If the water just started running, report the first pulse timestamp.
+      publishWaterOn(firstPulseTimestamp);
+    } else {
+      // If the water just stopped running, report the last pulse timestamp.
+      publishWaterRunning(lastPulseTimestamp + 1, "water off");
+    }
 
     // Either way, reset the firstPulseTimestamp.
     firstPulseTimestamp = 0;
 
-    // Publish an event indicating the water turned on or off.
-    publishUpdate(stateChangeTime, "state change");
+    // Indicate that a message was sent so we don't send another.
+    messageSent = true;
   }
+
+  return messageSent;
 }
 
 void intervalUpdates(time_t currentInterval) {
@@ -172,7 +194,7 @@ void setup() {
   lastInterval = (Time.now() / intervalLength) + 1;
 
   // Publish a message indicating that startup completed.
-  publishUpdate(Time.now(), "restart");
+  publishStatus(Time.now(), "restart");
 }
 
 void loop() {
