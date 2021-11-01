@@ -26,6 +26,7 @@ unsigned long dailyCount[] = {0, 0, 0};
 time_t firstPulseTimestamp = 0;
 time_t lastPulseTimestamp = 0;
 bool waterRunning = false;
+time_t lastCounterReset = 0;
 
 // Variables to calculate sampling rate.
 unsigned short sampleCount = 0;
@@ -101,17 +102,36 @@ bool updateWaterRunning() {
   return messageSent;
 }
 
-void intervalUpdates(time_t currentInterval) {
-  time_t now = currentInterval * intervalLength;
+void intervalUpdates(time_t now) {
+  time_t currentInterval = (now / intervalLength);
   time_t intervalStartTime = lastInterval * intervalLength;
 
   // Determine whether the water is running or not.
-  updateWaterRunning();
+  bool messageSent = updateWaterRunning();
 
   // Update minute counters.
   if (Time.minute(now) != Time.minute(intervalStartTime)) {
     lastMinuteSampleCount = sampleCount;
     sampleCount = 0;
+
+    if (!messageSent && waterRunning) {
+      publishWaterRunning(lastPulseTimestamp + 1, "water running");
+      messageSent = true;
+    }
+  }
+
+  // Reset the daily counters as long as the water is not running.
+  if (!messageSent && !waterRunning && Time.day(now) != Time.day(lastCounterReset)) {
+    publishStatus(Time.now(), "reset counters");
+    resetCounter(dailyCount);
+    lastCounterReset = now;
+    messageSent = true;
+  }
+
+  // Send hourly updates as long as the water is not running.
+  if (!messageSent && !waterRunning && Time.hour(now) != Time.hour(intervalStartTime)) {
+    publishStatus(Time.now(), "hourly update");
+    messageSent = true;
   }
 
   // Reset the interval counters.
@@ -206,15 +226,19 @@ void setup() {
   // which will delay any interval counts until a full interval has elapsed.
   lastInterval = (Time.now() / intervalLength) + 1;
 
+  // Set the last time the daily counters were reset.
+  lastCounterReset = Time.now();
+
   // Publish a message indicating that startup completed.
   publishStatus(Time.now(), "restart");
 }
 
 void loop() {
   // Update counters based on the current time.
-  time_t currentInterval = (Time.now() / intervalLength);
+  time_t now = Time.now();
+  time_t currentInterval = (now / intervalLength);
   if (currentInterval > lastInterval) {
-    intervalUpdates(currentInterval);
+    intervalUpdates(now);
   }
 
   // Read new values.
