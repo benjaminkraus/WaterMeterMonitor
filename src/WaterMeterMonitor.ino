@@ -122,9 +122,9 @@ void intervalUpdates(time_t now) {
 
   // Reset the daily counters as long as the water is not running.
   if (!messageSent && !waterRunning && Time.day(now) != Time.day(lastCounterReset)) {
-    publishStatus(Time.now(), "reset counters");
     resetCounter(dailyCount);
     lastCounterReset = now;
+    publishStatus(Time.now(), "reset counters");
     messageSent = true;
   }
 
