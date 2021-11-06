@@ -44,6 +44,7 @@ bool waterRunning = false;
 
 // Daily pulse counter.
 unsigned long dailyCount[] = {0, 0, 0};
+unsigned long lastDailyCount[] = {0, 0, 0};
 time_t lastCounterReset = 0;
 
 // Variables to calculate sampling rate.
@@ -112,9 +113,9 @@ float getFlowRate(time_t from, time_t to, unsigned short* counter) {
   return 0.0;
 }
 
-String getPulseCountsJSON() {
+String getPulseCountsJSON(unsigned long* counter) {
   return String::format("{ \"x\": %u, \"y\": %u, \"z\": %u }",
-    dailyCount[0], dailyCount[1], dailyCount[2]);
+    counter[0], counter[1], counter[2]);
 }
 
 String getDiagnosticJSON(String statusMsg) {
@@ -124,31 +125,33 @@ String getDiagnosticJSON(String statusMsg) {
 
 void publishWaterOn(time_t timestamp) {
   String statusMsg = "water started";
-  String timestr = Time.format(timestamp, TIME_FORMAT_ISO8601_FULL);
+  String timeStr = Time.format(timestamp, TIME_FORMAT_ISO8601_FULL);
   String status = String::format(
     "{ \"waterRunning\": %d, \"time\": \"%s\", \"statusMessage\": \"%s\", \"diagnostics\": %s }",
-        waterRunning, timestr.c_str(), statusMsg.c_str(), getDiagnosticJSON(statusMsg).c_str());
+        waterRunning, timeStr.c_str(), statusMsg.c_str(), getDiagnosticJSON(statusMsg).c_str());
   Particle.publish("waterMeter/waterOn", status);
   lastMessageSent = timestamp;
 }
 
 void publishWaterRunning(time_t from, time_t to, unsigned short* counter) {
   String statusMsg = waterRunning ? "water running" : "water stopped";
-  String timestr = Time.format(to, TIME_FORMAT_ISO8601_FULL);
+  String timeStr = Time.format(to, TIME_FORMAT_ISO8601_FULL);
+  String pulseCountStr = getPulseCountsJSON(lastDailyCount);
   float flowRate = getFlowRate(from, to, counter);
   String status = String::format(
     "{ \"waterRunning\": %d, \"time\": \"%s\", \"pulseCount\": %s, \"flowRate\": %f, \"statusMessage\": \"%s\", \"diagnostics\": %s }",
-        waterRunning, timestr.c_str(), getPulseCountsJSON().c_str(), flowRate, statusMsg.c_str(), getDiagnosticJSON(statusMsg).c_str());
+        waterRunning, timeStr.c_str(), pulseCountStr.c_str(), flowRate, statusMsg.c_str(), getDiagnosticJSON(statusMsg).c_str());
   Particle.publish("waterMeter/waterRunning", status);
   lastMessageSent = to;
 }
 
 void publishStatus(time_t timestamp, String statusMsg) {
-  String timestr = Time.format(timestamp, TIME_FORMAT_ISO8601_FULL);
+  String timeStr = Time.format(timestamp, TIME_FORMAT_ISO8601_FULL);
+  String pulseCountStr = getPulseCountsJSON(dailyCount);
   float flowRate = 0.0;
   String status = String::format(
     "{ \"waterRunning\": %d, \"time\": \"%s\", \"pulseCount\": %s, \"flowRate\": %f, \"statusMessage\": \"%s\", \"diagnostics\": %s }",
-        waterRunning, timestr.c_str(), getPulseCountsJSON().c_str(), flowRate, statusMsg.c_str(), getDiagnosticJSON(statusMsg).c_str());
+        waterRunning, timeStr.c_str(), pulseCountStr.c_str(), flowRate, statusMsg.c_str(), getDiagnosticJSON(statusMsg).c_str());
   Particle.publish("waterMeter/status", status);
   lastMessageSent = timestamp;
 }
@@ -166,11 +169,18 @@ bool checkNonZeroCounter(unsigned short* counter) {
   return counter[0] != 0 || counter[1] != 0 || counter[2] != 0;
 }
 
+void copyCounter(unsigned long* counter, unsigned long* last) {
+  last[0] = counter[0];
+  last[1] = counter[1];
+  last[2] = counter[2];
+}
+
 void resetCounter(unsigned long* counter) {
   counter[0] = 0;
   counter[1] = 0;
   counter[2] = 0;
 }
+
 void intervalUpdates() {
   time_t now = Time.now();
   if (!waterRunning && intervalStartTime > 0) {
@@ -184,13 +194,14 @@ void intervalUpdates() {
     // This is delayed by one interval so that we know whether the water has
     // stopped flowing before sending each update.
     if (checkNonZeroCounter(lastIntervalCount)) {
-      time_t timestamp = waterRunning ? intervalStartTime : lastPulseTimestamp;
+      time_t timestamp = waterRunning ? intervalStartTime : lastPulseTimestamp + 1;
       publishWaterRunning(lastIntervalStartTime, timestamp, lastIntervalCount);
     }
 
-    // Copy the current interval count into the last interval count.
+    // Copy the current interval and daily count.
     // If the water has stopped running, intervalCount will be all zeros and
     // will cause lastIntervalCount to be zeroed out as well.
+    copyCounter(dailyCount, lastDailyCount);
     rolloverCounter(intervalCount, lastIntervalCount);
     lastIntervalStartTime = intervalStartTime;
 
