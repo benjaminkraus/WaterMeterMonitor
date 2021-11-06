@@ -17,25 +17,39 @@ bool foundLIS3MDL = false;
  * Pulse Counters
  **********************/
 
-// Pulse counters
+// Interval pulse counters and time stamps.
 String channels[] = {"x", "y", "z"};
 time_t intervalLength = 5; // 5 second intervals
-time_t lastInterval = 0;
-unsigned short intervalCount[] = {0, 0, 0};
-unsigned long dailyCount[] = {0, 0, 0};
-time_t firstPulseTimestamp = 0;
+time_t intervalStartTime = 0;
+time_t lastIntervalStartTime = 0;
 time_t lastPulseTimestamp = 0;
+time_t lastMessageSent = 0;
+unsigned short intervalCount[] = {0, 0, 0};
+unsigned short lastIntervalCount[] = {0, 0, 0};
 bool waterRunning = false;
+
+// Daily pulse counter.
+unsigned long dailyCount[] = {0, 0, 0};
 time_t lastCounterReset = 0;
 
 // Variables to calculate sampling rate.
 unsigned short sampleCount = 0;
-unsigned short lastMinuteSampleCount = 0;
+time_t lastSampleCountReset = 0;
+float sampleRate = 0;
 
-float getFlowRate(time_t from, time_t to) {
+void updateSampleRate() {
+  time_t now = Time.now();
+  if (now - lastSampleCountReset >= 60) {
+    sampleRate = (float)sampleCount / ((float)(now - lastSampleCountReset));
+    sampleCount = 0;
+    lastSampleCountReset = now;
+  }
+}
+
+float getFlowRate(time_t from, time_t to, unsigned short* counter) {
   if (to > from) {
-    unsigned short maxFlow = max(intervalCount[0], intervalCount[1]);
-    maxFlow = max(maxFlow, intervalCount[2]);
+    unsigned short maxFlow = max(counter[0], counter[1]);
+    maxFlow = max(maxFlow, counter[2]);
     return (float)maxFlow/((float)(to-from));
   }
   return 0.0;
@@ -47,40 +61,52 @@ String getPulseCountsJSON() {
 }
 
 String getDiagnosticJSON(String statusMsg) {
-  float sampleRate = (float)lastMinuteSampleCount/60;
-  return String::format("\"{ \\\"statusMessage\\\": \\\"%s\\\", \\\"sampleRate\\\": %f }\"", 
-    statusMsg.c_str(), sampleRate);
+  return String::format("\"{ \\\"statusMessage\\\": \\\"%s\\\" }\"",
+    statusMsg.c_str());
 }
 
-void publishWaterStateChange(time_t timestamp) {
-  String statusMsg = waterRunning ? "water started" : "water stopped";
+void publishWaterOn(time_t timestamp) {
+  String statusMsg = "water started";
   String timestr = Time.format(timestamp, TIME_FORMAT_ISO8601_FULL);
   String status = String::format(
-    "{ \"waterRunning\": %d, \"time\": \"%s\", \"statusMessage\": \"%s\" }",
-        waterRunning, timestr.c_str(), statusMsg.c_str());
+    "{ \"waterRunning\": %d, \"time\": \"%s\", \"statusMessage\": \"%s\", \"diagnostics\": %s }",
+        waterRunning, timestr.c_str(), statusMsg.c_str(), getDiagnosticJSON(statusMsg).c_str());
   Particle.publish("waterMeter/waterOn", status);
+  lastMessageSent = timestamp;
 }
 
-void publishWaterRunning(time_t from, time_t to, String statusMsg) {
+void publishWaterRunning(time_t from, time_t to, unsigned short* counter) {
+  String statusMsg = waterRunning ? "water running" : "water stopped";
   String timestr = Time.format(to, TIME_FORMAT_ISO8601_FULL);
+  float flowRate = getFlowRate(from, to, counter);
   String status = String::format(
     "{ \"waterRunning\": %d, \"time\": \"%s\", \"pulseCount\": %s, \"flowRate\": %f, \"statusMessage\": \"%s\", \"diagnostics\": %s }",
-        waterRunning, timestr.c_str(), getPulseCountsJSON().c_str(), getFlowRate(from, to), statusMsg.c_str(), getDiagnosticJSON(statusMsg).c_str());
+        waterRunning, timestr.c_str(), getPulseCountsJSON().c_str(), flowRate, statusMsg.c_str(), getDiagnosticJSON(statusMsg).c_str());
   Particle.publish("waterMeter/waterRunning", status);
+  lastMessageSent = to;
 }
 
-void publishStatus(time_t from, time_t to, String statusMsg) {
-  String timestr = Time.format(to, TIME_FORMAT_ISO8601_FULL);
+void publishStatus(time_t timestamp, String statusMsg) {
+  String timestr = Time.format(timestamp, TIME_FORMAT_ISO8601_FULL);
+  float flowRate = 0.0;
   String status = String::format(
     "{ \"waterRunning\": %d, \"time\": \"%s\", \"pulseCount\": %s, \"flowRate\": %f, \"statusMessage\": \"%s\", \"diagnostics\": %s }",
-        waterRunning, timestr.c_str(), getPulseCountsJSON().c_str(), getFlowRate(from, to), statusMsg.c_str(), getDiagnosticJSON(statusMsg).c_str());
+        waterRunning, timestr.c_str(), getPulseCountsJSON().c_str(), flowRate, statusMsg.c_str(), getDiagnosticJSON(statusMsg).c_str());
   Particle.publish("waterMeter/status", status);
+  lastMessageSent = timestamp;
 }
 
-void resetCounter(unsigned short* counter) {
+void rolloverCounter(unsigned short* counter, unsigned short* last) {
+  last[0] = counter[0];
+  last[1] = counter[1];
+  last[2] = counter[2];
   counter[0] = 0;
   counter[1] = 0;
   counter[2] = 0;
+}
+
+bool checkNonZeroCounter(unsigned short* counter) {
+  return counter[0] != 0 || counter[1] != 0 || counter[2] != 0;
 }
 
 void resetCounter(unsigned long* counter) {
@@ -88,71 +114,45 @@ void resetCounter(unsigned long* counter) {
   counter[1] = 0;
   counter[2] = 0;
 }
+void intervalUpdates() {
+  time_t now = Time.now();
+  if (!waterRunning && intervalStartTime > 0) {
+    waterRunning = true;
+    publishWaterOn(intervalStartTime);
+  } else if (waterRunning && now - intervalStartTime >= intervalLength) {
+    // Check if the water is still running.
+    waterRunning = checkNonZeroCounter(intervalCount);
 
-bool updateWaterRunning(time_t from, time_t now) {
-  bool messageSent = false;
-  bool wasWaterRunning = waterRunning;
-  waterRunning = intervalCount[0] != 0 || 
-    intervalCount[1] != 0 || intervalCount[2] != 0;
-  if (wasWaterRunning != waterRunning) {
-    // If the water just started running, report the first pulse timestamp.
-    // If the water just stopped running, report the last pulse timestamp.
-    time_t timestamp = waterRunning ? firstPulseTimestamp : lastPulseTimestamp + 1;
-    publishWaterStateChange(timestamp);
+    // Publish the previous interval's pulse counts and flow rate.
+    // This is delayed by one interval so that we know whether the water has
+    // stopped flowing before sending each update.
+    if (checkNonZeroCounter(lastIntervalCount)) {
+      time_t timestamp = waterRunning ? intervalStartTime : lastPulseTimestamp;
+      publishWaterRunning(lastIntervalStartTime, timestamp, lastIntervalCount);
+    }
 
-    // If the first pulse was just detected don't send a second message with the
-    // same timestamp. 
-    messageSent = (firstPulseTimestamp == now) || !waterRunning;
-  } else if (waterRunning) {
-    // If the water is still running, update the first pulse timestamp to the
-    // start of the current interval so the flow rate estimate is accurate.
-    firstPulseTimestamp = from-1;
-  }
+    // Copy the current interval count into the last interval count.
+    // If the water has stopped running, intervalCount will be all zeros and
+    // will cause lastIntervalCount to be zeroed out as well.
+    rolloverCounter(intervalCount, lastIntervalCount);
+    lastIntervalStartTime = intervalStartTime;
 
-  // If the water is not running, reset the firstPulseTimestamp.
-  if (!waterRunning) {
-    firstPulseTimestamp = 0;
-  }
-
-  return messageSent;
-}
-
-void intervalUpdates(time_t now) {
-  time_t currentInterval = (now / intervalLength);
-  time_t intervalStartTime = lastInterval * intervalLength;
-
-  // Update sample rate counter.
-  if (Time.minute(now) != Time.minute(intervalStartTime)) {
-    lastMinuteSampleCount = sampleCount;
-    sampleCount = 0;
-  }
-
-  // Determine whether the water is running or not.
-  bool messageSent = updateWaterRunning(intervalStartTime, now);
-
-  // If the water is running, publish the current readings.
-  if (!messageSent && waterRunning) {
-    publishWaterRunning(firstPulseTimestamp, lastPulseTimestamp, "water running");
-    messageSent = true;
-  }
-
-  // Reset the daily counters as long as the water is not running.
-  if (!messageSent && !waterRunning && Time.day(now) != Time.day(lastCounterReset)) {
+    // If the water is still running, increment the intervalStartTime.
+    // If the water has stopped running, set the intervalStartTime to 0.
+    intervalStartTime = waterRunning ? now : 0;
+  } else if (Time.day(now) != Time.day(lastCounterReset)
+      && now - lastMessageSent >= intervalLength) {
+    // Reset the daily counters.
     resetCounter(dailyCount);
     lastCounterReset = now;
-    publishStatus(intervalStartTime, now, "reset counters");
-    messageSent = true;
-  }
 
-  // Send hourly updates as long as the water is not running.
-  if (!messageSent && !waterRunning && Time.hour(now) != Time.hour(intervalStartTime)) {
-    publishStatus(intervalStartTime, now, "hourly update");
-    messageSent = true;
+    // Publish the status after resetting the counters to record the zero values.
+    publishStatus(now, "reset counters");
+  } else if (Time.hour(now) != Time.hour(lastMessageSent)
+      && now - lastMessageSent >= intervalLength) {
+    // Publish at least one message every hour.
+    publishStatus(now, "hourly update");
   }
-
-  // Reset the interval counters.
-  resetCounter(intervalCount);
-  lastInterval = currentInterval;
 }
 
 /**********************
@@ -176,8 +176,8 @@ void incrementCounts(int c) {
   ++intervalCount[c];
   ++dailyCount[c];
   lastPulseTimestamp = Time.now();
-  if (firstPulseTimestamp == 0) {
-    firstPulseTimestamp = lastPulseTimestamp;
+  if (intervalStartTime == 0) {
+    intervalStartTime = lastPulseTimestamp;
   }
 }
 
@@ -227,28 +227,26 @@ void setup() {
                             false); // disable interrupt pin
   }
 
+  time_t now = Time.now();
   if (foundLIS3MDL) {
     // Get initial readings from the magnetometer.
     updateReadings();
 
     // Getting the initial readings could have triggered erroneous pulse counts.
-    // Reset the pulse counts back to zero.
-    resetCounter(intervalCount);
+    // Reset the pulse counts back to zero. Call rolloverCounter twice to make
+    // sure that lastIntervalCount is zeroed out.
+    rolloverCounter(intervalCount, lastIntervalCount);
+    rolloverCounter(intervalCount, lastIntervalCount);
     resetCounter(dailyCount);
-    firstPulseTimestamp = 0;
+    intervalStartTime = 0;
+    lastCounterReset = now;
+    publishStatus(now, "restart successful");
+  } else {
+    publishStatus(now, "sensor not found");
   }
-  
-  // Set the last interval start as one higher than the current interval, which
-  // which will delay any interval counts until a full interval has elapsed.
-  time_t now = Time.now();
-  lastInterval = (now / intervalLength) + 1;
-
-  // Set the last time the daily counters were reset.
-  lastCounterReset = now;
-
-  // Publish a message indicating that startup completed.
-  publishStatus(now, now, "restart");
 }
+time_t lastKeepAlive = 0;
+
 
 void loop() {
   // Read new values.
@@ -259,10 +257,6 @@ void loop() {
     }
   }
 
-  // Update counters based on the current time.
-  time_t now = Time.now();
-  time_t currentInterval = (now / intervalLength);
-  if (currentInterval > lastInterval) {
-    intervalUpdates(now);
-  }
+  updateSampleRate();
+  intervalUpdates();
 }
