@@ -13,9 +13,23 @@ Adafruit_LIS3MDL lis3mdl;
 
 bool foundLIS3MDL = false;
 
-/**********************
- * Pulse Counters
- **********************/
+/********************************************
+ * Variables for Magnetometer Readings
+ ********************************************/
+
+int16_t lastReading[] = {0, 0, 0};
+int16_t minReading[] = { 32767,  32767,  32767};
+int16_t maxReading[] = {-32768, -32768, -32768};
+uint64_t samplingDelay = 8; // 8 milliseconds = 125 Hz
+uint64_t lastReadingTimestamp = 0;
+bool lastReadingHigh[] = {false, false, false};
+
+int16_t lowThreshold[] = {-1176, -2520, -21694};
+int16_t highThreshold[] = {-369, -1816, -20953};
+
+/********************************************
+ * Variables for Pulse Counters
+ ********************************************/
 
 // Interval pulse counters and time stamps.
 String channels[] = {"x", "y", "z"};
@@ -36,6 +50,49 @@ time_t lastCounterReset = 0;
 unsigned short sampleCount = 0;
 time_t lastSampleCountReset = 0;
 float sampleRate = 0;
+
+/********************************************
+ * Functions for Magnetometer Readings
+ ********************************************/
+void incrementCounts(int c) {
+  ++intervalCount[c];
+  ++dailyCount[c];
+  lastPulseTimestamp = Time.now();
+  if (intervalStartTime == 0) {
+    intervalStartTime = lastPulseTimestamp;
+  }
+}
+
+void updateChannelReadings(int c, int16_t reading) {
+  lastReading[c] = reading;
+  minReading[c] = min(minReading[c], reading);
+  maxReading[c] = max(maxReading[c], reading);
+
+  if (reading > highThreshold[c]) {
+    if (!lastReadingHigh[c]) {
+      incrementCounts(c);
+    }
+    lastReadingHigh[c] = true;
+  } else if (reading < lowThreshold[c]) {
+    if (lastReadingHigh[c]) {
+      incrementCounts(c);
+    }
+    lastReadingHigh[c] = false;
+  }
+}
+
+void updateReadings() {
+  lis3mdl.read();
+  ++sampleCount;
+  lastReadingTimestamp = System.millis();
+  updateChannelReadings(0, lis3mdl.x);
+  updateChannelReadings(1, lis3mdl.y);
+  updateChannelReadings(2, lis3mdl.z);
+}
+
+/********************************************
+ * Functions for Pulse Counters
+ ********************************************/
 
 void updateSampleRate() {
   time_t now = Time.now();
@@ -153,59 +210,6 @@ void intervalUpdates() {
     // Publish at least one message every hour.
     publishStatus(now, "hourly update");
   }
-}
-
-/**********************
- * Magnetometer Readings
- **********************/
-
-// Variables to store readings.
-int16_t lastReading[] = {0, 0, 0};
-int16_t minReading[] = { 32767,  32767,  32767};
-int16_t maxReading[] = {-32768, -32768, -32768};
-uint64_t samplingDelay = 8; // 8 milliseconds = 125 Hz
-uint64_t lastReadingTimestamp = 0;
-bool lastReadingHigh[] = {false, false, false};
-
-// Hard-coded thresholds.
-int16_t lowThreshold[] = {-1176, -2520, -21694};
-int16_t highThreshold[] = {-369, -1816, -20953};
-
-// Functions to handle readings.
-void incrementCounts(int c) {
-  ++intervalCount[c];
-  ++dailyCount[c];
-  lastPulseTimestamp = Time.now();
-  if (intervalStartTime == 0) {
-    intervalStartTime = lastPulseTimestamp;
-  }
-}
-
-void updateChannelReadings(int c, int16_t reading) {
-  lastReading[c] = reading;
-  minReading[c] = min(minReading[c], reading);
-  maxReading[c] = max(maxReading[c], reading);
-
-  if (reading > highThreshold[c]) {
-    if (!lastReadingHigh[c]) {
-      incrementCounts(c);
-    }
-    lastReadingHigh[c] = true;
-  } else if (reading < lowThreshold[c]) {
-    if (lastReadingHigh[c]) {
-      incrementCounts(c);
-    }
-    lastReadingHigh[c] = false;
-  }
-}
-
-void updateReadings() {
-  lis3mdl.read();
-  ++sampleCount;
-  lastReadingTimestamp = System.millis();
-  updateChannelReadings(0, lis3mdl.x);
-  updateChannelReadings(1, lis3mdl.y);
-  updateChannelReadings(2, lis3mdl.z);
 }
 
 void setup() {
