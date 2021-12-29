@@ -181,6 +181,14 @@ void resetCounter(unsigned long* counter) {
   counter[2] = 0;
 }
 
+bool nextUpdateDue(time_t now, time_t lastUpdate, time_t minInterval) {
+  // Publish updates at least once every four hours.
+  int currentHour = Time.hour(now);
+  bool divisibleByFour = ((currentHour / 4) * 4 == currentHour);
+  return currentHour != Time.hour(lastUpdate) && divisibleByFour
+      && now - lastUpdate >= minInterval;
+}
+
 void intervalUpdates() {
   time_t now = Time.now();
   if (!waterRunning && intervalStartTime > 0) {
@@ -216,8 +224,7 @@ void intervalUpdates() {
 
     // Publish the status after resetting the counters to record the zero values.
     publishStatus(now, "reset counters");
-  } else if (Time.hour(now) != Time.hour(lastMessageSent)
-      && now - lastMessageSent >= intervalLength) {
+  } else if (nextUpdateDue(now, lastMessageSent, intervalLength)) {
     // Publish at least one message every hour.
     publishStatus(now, "hourly update");
   }
