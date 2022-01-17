@@ -64,6 +64,13 @@ void incrementCounts(int c) {
   }
 }
 
+void resetMinMaxMagnetometerReadings() {
+  for (size_t c = 0; c < 3; c++) {
+    minReading[c] = 32767;
+    maxReading[c] = -32768;
+  }
+}
+
 void updateChannelReadings(int c, int16_t reading) {
   lastReading[c] = reading;
   minReading[c] = min(minReading[c], reading);
@@ -119,8 +126,8 @@ String getPulseCountsJSON(unsigned long* counter) {
 }
 
 String getDiagnosticJSON(String statusMsg) {
-  return String::format("\"{ \\\"statusMessage\\\": \\\"%s\\\" }\"",
-    statusMsg.c_str());
+  return String::format("\"{ \\\"statusMessage\\\": \\\"%s\\\", \\\"minReadings\\\": [%i, %i, %i], \\\"maxReadings\\\": [%i, %i, %i] }\"",
+    statusMsg.c_str(), minReading[0], minReading[1], minReading[2], maxReading[0], maxReading[1], maxReading[2]);
 }
 
 void publishWaterOn(time_t timestamp) {
@@ -224,8 +231,11 @@ void intervalUpdates() {
 
     // Publish the status after resetting the counters to record the zero values.
     publishStatus(now, "reset counters");
+
+    // Reset the daily minimum and maximum readings.
+    resetMinMaxMagnetometerReadings();
   } else if (nextUpdateDue(now, lastMessageSent, intervalLength)) {
-    // Publish at least one message every hour.
+    // Publish at least one message every four hours.
     publishStatus(now, "hourly update");
   }
 }
