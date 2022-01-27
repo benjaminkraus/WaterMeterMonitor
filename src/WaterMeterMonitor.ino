@@ -36,6 +36,7 @@ String channels[] = {"x", "y", "z"};
 time_t intervalLength = 5; // 5 second intervals
 time_t intervalStartTime = 0;
 time_t lastIntervalStartTime = 0;
+time_t waterStartTime = 0;
 time_t lastPulseTimestamp = 0;
 time_t lastMessageSent = 0;
 unsigned short intervalCount[] = {0, 0, 0};
@@ -61,6 +62,7 @@ void incrementCounts(int c) {
   lastPulseTimestamp = Time.now();
   if (intervalStartTime == 0) {
     intervalStartTime = lastPulseTimestamp;
+    waterStartTime = lastPulseTimestamp;
   }
 }
 
@@ -136,8 +138,8 @@ String getDiagnosticJSON(String statusMsg) {
 }
 
 void publishWaterOn(time_t timestamp) {
-  String statusMsg = "water started";
   String timeStr = Time.format(timestamp, TIME_FORMAT_ISO8601_FULL);
+  String statusMsg = "water started";
   String status = String::format(
     "{ \"waterRunning\": %d, \"time\": \"%s\", \"statusMessage\": \"%s\", \"diagnostics\": %s }",
         waterRunning, timeStr.c_str(), statusMsg.c_str(), getDiagnosticJSON(statusMsg).c_str());
@@ -150,9 +152,10 @@ void publishWaterRunning(time_t from, time_t to, unsigned short* counter) {
   String timeStr = Time.format(to, TIME_FORMAT_ISO8601_FULL);
   String pulseCountStr = getPulseCountsJSON(lastDailyCount);
   float flowRate = getFlowRate(from, to, counter);
+  uint32_t duration = static_cast<uint32_t>(to - waterStartTime);
   String status = String::format(
-    "{ \"waterRunning\": %d, \"time\": \"%s\", \"pulseCount\": %s, \"flowRate\": %f, \"statusMessage\": \"%s\", \"diagnostics\": %s }",
-        waterRunning, timeStr.c_str(), pulseCountStr.c_str(), flowRate, statusMsg.c_str(), getDiagnosticJSON(statusMsg).c_str());
+    "{ \"waterRunning\": %d, \"time\": \"%s\", \"pulseCount\": %s, \"flowRate\": %f, \"duration\": %u, \"statusMessage\": \"%s\", \"diagnostics\": %s }",
+        waterRunning, timeStr.c_str(), pulseCountStr.c_str(), flowRate, duration, statusMsg.c_str(), getDiagnosticJSON(statusMsg).c_str());
   Particle.publish("waterMeter/waterRunning", status);
   lastMessageSent = to;
 }
@@ -161,9 +164,10 @@ void publishStatus(time_t timestamp, String statusMsg) {
   String timeStr = Time.format(timestamp, TIME_FORMAT_ISO8601_FULL);
   String pulseCountStr = getPulseCountsJSON(dailyCount);
   float flowRate = 0.0;
+  uint32_t duration = 0;
   String status = String::format(
-    "{ \"waterRunning\": %d, \"time\": \"%s\", \"pulseCount\": %s, \"flowRate\": %f, \"statusMessage\": \"%s\", \"diagnostics\": %s }",
-        waterRunning, timeStr.c_str(), pulseCountStr.c_str(), flowRate, statusMsg.c_str(), getDiagnosticJSON(statusMsg).c_str());
+    "{ \"waterRunning\": %d, \"time\": \"%s\", \"pulseCount\": %s, \"flowRate\": %f, \"duration\": %u, \"statusMessage\": \"%s\", \"diagnostics\": %s }",
+        waterRunning, timeStr.c_str(), pulseCountStr.c_str(), flowRate, duration, statusMsg.c_str(), getDiagnosticJSON(statusMsg).c_str());
   Particle.publish("waterMeter/status", status);
   lastMessageSent = timestamp;
 }
